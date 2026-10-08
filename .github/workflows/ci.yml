@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-validate:
+    name: ShellCheck & Syntax Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate Bash Syntax
+        run: |
+          bash -n multiagy
+          bash -n install.sh
+
+      - name: Run ShellCheck
+        run: |
+          shellcheck -S warning install.sh
+          shellcheck -S warning multiagy
+
+      - name: Verify CLI Execution
+        run: |
+          chmod +x multiagy
+          ./multiagy help

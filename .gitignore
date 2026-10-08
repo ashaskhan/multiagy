@@ -1,0 +1,35 @@
+# Archives and backups
+*.tar.gz
+*.tgz
+*.zip
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+
+# OS Artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Multiagy local test profiles (if created inside workspace)
+AntigravityProfiles/
+profiles/
+.templates/
+
+# Shell & editor history
+.bash_history
+.zsh_history
+.history/
+.vscode/
+.idea/
+
+# Testing & logs
+*.log
+scratch/
+test_output/

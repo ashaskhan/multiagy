@@ -1,0 +1,48 @@
+name: 🐛 Bug Report
+description: Report a bug or issue with Multiagy
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue! Please run `multiagy doctor` and include the output below.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the problem...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this behavior?
+      placeholder: |
+        1. Run 'multiagy new test --auth-only'
+        2. Run 'multiagy test'
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor_output
+    attributes:
+      label: multiagy doctor Output
+      description: Please paste the full output of `multiagy doctor`.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Ubuntu / Debian
+        - Fedora / RHEL
+        - Arch Linux
+        - macOS
+        - Other Linux distribution
+    validations:
+      required: true
