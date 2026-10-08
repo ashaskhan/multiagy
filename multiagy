@@ -82,6 +82,14 @@ is_auth_only() {
   [ -f "$(profile_dir "$1")/.auth-only" ]
 }
 
+is_profile_running() {
+  local profile=$1
+  local profile_path data_dir
+  profile_path="$(profile_dir "$profile")"
+  data_dir="$(user_data_dir "$profile_path")"
+  ps -eo args 2>/dev/null | grep -v grep | grep -qF "$data_dir"
+}
+
 linux_launcher_dir() {
   printf '%s/.local/share/multiagy/launchers\n' "$HOME"
 }
@@ -598,6 +606,10 @@ delete_profile() {
 
   validate_name "$profile"
 
+  if is_profile_running "$profile"; then
+    abort "profile '$profile' is currently running. Please close Antigravity before deleting."
+  fi
+
   profile_path="$(profile_dir "$profile")"
   if [ ! -d "$profile_path" ]; then
     abort "profile '$profile' does not exist"
@@ -622,6 +634,10 @@ rename_profile() {
   validate_name "$old"
   validate_name "$new"
 
+  if is_profile_running "$old"; then
+    abort "profile '$old' is currently running. Please close Antigravity before renaming."
+  fi
+
   old_path="$(profile_dir "$old")"
   new_path="$(profile_dir "$new")"
 
@@ -640,14 +656,35 @@ rename_profile() {
 }
 
 clone_profile() {
-  local src=$1
-  local dest=$2
-  local src_path
-  local dest_path
+  local src=""
+  local dest=""
+  local fresh_auth=false
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fresh-auth) fresh_auth=true ;;
+      -*) abort "unknown option: $1" ;;
+      *)
+        if [ -z "$src" ]; then
+          src="$1"
+        elif [ -z "$dest" ]; then
+          dest="$1"
+        else
+          abort "too many arguments for clone"
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  if [ -z "$src" ] || [ -z "$dest" ]; then
+    abort "usage: multiagy clone <src> <dest> [--fresh-auth]"
+  fi
 
   validate_name "$src"
   validate_name "$dest"
 
+  local src_path dest_path
   src_path="$(profile_dir "$src")"
   dest_path="$(profile_dir "$dest")"
 
@@ -660,8 +697,17 @@ clone_profile() {
 
   print_info "Cloning profile '$src' to '$dest'..."
   cp -R "$src_path" "$dest_path"
-  create_shortcut "$dest"
 
+  if [ "$fresh_auth" = true ]; then
+    print_info "Sanitizing authentication state in cloned profile..."
+    rm -rf "$dest_path/.local/share/keyrings"
+    rm -rf "$dest_path/.gemini"
+    rm -f "$dest_path/.config/Antigravity/app_storage.json"
+    rm -rf "$dest_path/.config/google-chrome"
+    rm -rf "$dest_path/.cache/google-chrome"
+  fi
+
+  create_shortcut "$dest"
   print_info "Successfully cloned '$src' to '$dest'"
 }
 
@@ -697,7 +743,38 @@ doctor_cli() {
     warnings=$((warnings + 1))
   fi
 
-  # 4. Icon Check (macOS)
+  # 4. Linux specific dependency checks
+  if [ "$(platform)" = "linux" ]; then
+    if command -v dbus-run-session &>/dev/null; then
+      echo "  [✓] D-Bus session runner: Found (dbus-run-session)"
+    else
+      echo "  [✗] D-Bus session runner: Missing 'dbus-run-session'. Required for profile isolation."
+      errors=$((errors + 1))
+    fi
+
+    if command -v gnome-keyring-daemon &>/dev/null; then
+      echo "  [✓] Keyring daemon: Found (gnome-keyring-daemon)"
+    else
+      echo "  [✗] Keyring daemon: Missing 'gnome-keyring-daemon'. Required for secure credential isolation."
+      errors=$((errors + 1))
+    fi
+
+    if command -v xdg-open &>/dev/null || command -v gio &>/dev/null; then
+      echo "  [✓] Desktop URL opener: Found ($(command -v xdg-open 2>/dev/null || command -v gio 2>/dev/null))"
+    else
+      echo "  [!] Desktop URL opener: Missing 'xdg-open' and 'gio'. Browser sign-in redirection may fail."
+      warnings=$((warnings + 1))
+    fi
+
+    if command -v google-chrome &>/dev/null || command -v google-chrome-stable &>/dev/null || [ -x /opt/google/chrome/chrome ]; then
+      echo "  [✓] Browser: Google Chrome detected"
+    else
+      echo "  [!] Browser: Google Chrome not detected. Default system browser will be used."
+      warnings=$((warnings + 1))
+    fi
+  fi
+
+  # 5. Icon Check (macOS)
   if [ "$(platform)" = "darwin" ]; then
     local icon_path
     icon_path="$(dirname "$(script_path)")/icon.icns"
@@ -709,7 +786,7 @@ doctor_cli() {
     fi
   fi
 
-  # 5. Base Directory
+  # 6. Base Directory
   if [ -d "$BASE" ]; then
     if [ -w "$BASE" ]; then
       echo "  [✓] Profile storage: $BASE (writable)"
@@ -728,8 +805,10 @@ doctor_cli() {
     else
       print_info "Found $warnings warning(s). Multiagy should still work, but some features might be degraded."
     fi
+    return 0
   else
     print_info "✗ Found $errors error(s) and $warnings warning(s). Please fix the errors above."
+    return 1
   fi
 }
 
@@ -771,7 +850,9 @@ profile_stats() {
 }
 
 update_cli() {
-  local script_url="https://raw.githubusercontent.com/sujitagarwal/multiagy-cli/main/multiagy"
+  local repo="${MULTIAGY_REPO:-ashaskhan/multiagy}"
+  local branch="${MULTIAGY_BRANCH:-main}"
+  local script_url="https://raw.githubusercontent.com/$repo/$branch/multiagy"
   local target
   target="$(script_path)"
 
@@ -786,7 +867,7 @@ update_cli() {
     print_info "Successfully updated multiagy!"
   else
     rm -f "$target.tmp"
-    abort "failed to download update"
+    abort "failed to download update from $script_url"
   fi
 }
 
@@ -868,7 +949,6 @@ _multiagy_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
     opts="new list status rename delete clone template export import update doctor stats completion help"
- pocket
 
     if [[ ${COMP_CWORD} -eq 1 ]] ; then
         local profiles=$(multiagy list --raw 2>/dev/null)
@@ -917,10 +997,16 @@ template_save() {
   print_info "Saving profile '$profile' as template '$tpl_name'..."
   cp -R "$profile_path" "$tpl_path"
 
-  # Remove auth-only marker from template (let the user choose on creation)
+  # Sanitize templates completely: templates are reusable base configurations, NOT credential stores
   rm -f "$tpl_path/.auth-only"
+  rm -rf "$tpl_path/.local/share/keyrings"
+  rm -rf "$tpl_path/.cache"
+  rm -rf "$tpl_path/.gemini"
+  rm -f "$tpl_path/.config/Antigravity/app_storage.json"
+  rm -rf "$tpl_path/.config/google-chrome"
+  rm -rf "$tpl_path/.cache/google-chrome"
 
-  print_info "Template '$tpl_name' saved"
+  print_info "Template '$tpl_name' saved (credentials sanitized)"
 }
 
 template_list() {
@@ -973,8 +1059,8 @@ status_profiles() {
     return 0
   fi
 
-  printf "%-16s %-10s %-12s %-20s %s\n" "PROFILE" "STATUS" "TYPE" "LAST USED" "SIZE"
-  printf "%-16s %-10s %-12s %-20s %s\n" "-------" "------" "----" "---------" "----"
+  printf "%-16s %-10s %-12s %-20s %s\n" "PROFILE" "STATUS" "TYPE" "MODIFIED" "SIZE"
+  printf "%-16s %-10s %-12s %-20s %s\n" "-------" "------" "----" "--------" "----"
 
   for dir in "$BASE"/*; do
     [ -d "$dir" ] || continue
@@ -986,9 +1072,7 @@ status_profiles() {
 
     # Check if running
     local status="stopped"
-    local data_dir
-    data_dir="$(user_data_dir "$dir")"
-    if ps -eo args 2>/dev/null | grep -v grep | grep -qF "$data_dir" 2>/dev/null; then
+    if is_profile_running "$name"; then
       status="running"
     fi
 
@@ -1030,6 +1114,10 @@ export_profile() {
 
   validate_name "$profile"
 
+  if is_profile_running "$profile"; then
+    abort "profile '$profile' is currently running. Please close Antigravity before exporting."
+  fi
+
   local profile_path
   profile_path="$(profile_dir "$profile")"
   if [ ! -d "$profile_path" ]; then
@@ -1042,8 +1130,8 @@ export_profile() {
 
   print_info "Exporting profile '$profile'..."
 
-  # Resolve symlinks before archiving (follow links)
-  tar -czf "$output_path" -C "$BASE" "$profile"
+  # Dereference symlinks (-h) so auth-only profiles export cleanly as a self-contained archive
+  tar -czhf "$output_path" -C "$BASE" "$profile"
 
   print_info "Exported to $output_path"
 }
@@ -1076,26 +1164,35 @@ import_profile() {
     abort "profile '$profile' already exists"
   fi
 
+  # Security audit: inspect tar entries for path traversal vulnerabilities (e.g., ../ or leading /)
+  local bad_entry
+  bad_entry=$(tar -tzf "$archive_path" 2>/dev/null | grep -E '(^/|\.\./)' | head -1 || true)
+  if [ -n "$bad_entry" ]; then
+    abort "insecure archive: path traversal detected in entry '$bad_entry'"
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/multiagy-import.XXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp_dir'" EXIT INT TERM
+
+  print_info "Extracting archive to secure staging area..."
+  tar -xzf "$archive_path" -C "$tmp_dir"
+
   mkdir -p "$BASE"
 
-  print_info "Importing profile as '$profile'..."
-
-  # Check if archive root matches profile name
+  # Find the extracted root
   local top_dir
   top_dir=$(tar -tzf "$archive_path" 2>/dev/null | head -1 | cut -d'/' -f1)
 
-  if [ "$top_dir" = "$profile" ]; then
-    tar -xzf "$archive_path" -C "$BASE"
-  elif [ -n "$top_dir" ]; then
-    tar -xzf "$archive_path" -C "$BASE"
-    # Rename extracted dir if needed
-    if [ "$top_dir" != "$profile" ] && [ -d "$BASE/$top_dir" ]; then
-      mv "$BASE/$top_dir" "$profile_path"
-    fi
+  if [ -n "$top_dir" ] && [ -d "$tmp_dir/$top_dir" ]; then
+    mv "$tmp_dir/$top_dir" "$profile_path"
   else
-    mkdir -p "$profile_path"
-    tar -xzf "$archive_path" -C "$profile_path"
+    mv "$tmp_dir" "$profile_path"
   fi
+
+  rm -rf "$tmp_dir"
+  trap - EXIT INT TERM
 
   create_shortcut "$profile"
   print_info "Imported profile '$profile'"
@@ -1113,7 +1210,7 @@ Commands:
   status                  Show which profiles are running, type, last used
   rename <old> <new>      Rename a profile (updates its shortcut)
   delete <name>           Delete a profile and its data
-  clone <src> <dest>      Clone an existing profile
+  clone <src> <dest> [--fresh-auth] Clone a profile (optional --fresh-auth)
   template save <profile> <name>   Save a profile as a reusable template
   template list           List available templates
   template delete <name>  Delete a template
@@ -1149,7 +1246,8 @@ case "$cmd" in
     delete_profile "${2-}"
     ;;
   clone)
-    clone_profile "${2-}" "${3-}"
+    shift
+    clone_profile "$@"
     ;;
   template)
     case "${2-}" in
@@ -1180,7 +1278,7 @@ case "$cmd" in
     update_cli
     ;;
   doctor)
-    doctor_cli
+    doctor_cli || exit 1
     ;;
   stats)
     profile_stats
